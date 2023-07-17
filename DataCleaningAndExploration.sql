@@ -36,11 +36,6 @@ SELECT location, population, total_deaths
 FROM PortfolioProject..CovidDeaths
 WHERE population > 1000000 AND total_deaths > 1000;
 
---Find the location with the highest mortality rate (total deaths divided by total cases)
-SELECT TOP 1 location, (total_deaths / total_cases) AS mortality_rate
-FROM PortfolioProject..CovidDeaths
-ORDER BY mortality_rate DESC
-
 --Retrieve the dates where the number of new deaths exceeded 1000 cases in a specific location
 SELECT date, new_deaths
 FROM PortfolioProject..CovidDeaths
@@ -85,17 +80,6 @@ FROM PortfolioProject..CovidDeaths
 WHERE date >= DATEADD(day, -13, GETDATE())
 GROUP BY location
 HAVING AVG(new_deaths_per_million) < (SELECT AVG(new_deaths_per_million) FROM PortfolioProject..CovidDeaths);
-
-
---Retrieve the dates where the number of new cases per million people exceeded the average number of new cases per million people for the respective continent
-SELECT continent, date, new_cases_per_million, average_new_cases_per_million
-FROM (
-    SELECT continent, date, new_cases_per_million,
-           AVG(new_cases_per_million) OVER (PARTITION BY continent) AS average_new_cases_per_million
-    FROM PortfolioProject..CovidDeaths
-) AS subquery
-WHERE new_cases_per_million > average_new_cases_per_million;
-
 
 --Retrieve the top 5 locations with the highest average daily increase in new cases over the last 30 days
 SELECT TOP 5 location, AVG(new_cases) AS average_daily_increase
@@ -144,12 +128,6 @@ SELECT location, date, reproduction_rate
 FROM PortfolioProject..CovidDeaths
 WHERE location = 'United States' AND reproduction_rate > 1.2;
 
---Calculate the doubling time of total deaths for a specific location, defined as the number of days it takes for the total deaths to double
-SELECT location, date, total_deaths,
-       LOG(2) / LOG(1 + (total_deaths - LAG(total_deaths) OVER (PARTITION BY location ORDER BY date)) / LAG(total_deaths) OVER (PARTITION BY location ORDER BY date)) AS doubling_time
-FROM PortfolioProject..CovidDeaths
-WHERE location = 'United States';
-
 --Retrieve the dates where the number of new cases exceeded the average number of new cases per million people for the respective location:
 SELECT location, date, new_cases, new_cases_per_million, average_new_cases_per_million
 FROM (
@@ -169,26 +147,11 @@ FROM (
 ) AS subquery
 GROUP BY continent, location, date;
 
---Find the locations that experienced a surge in new cases, defined as a 50% increase in new cases compared to the previous week
-SELECT location, date, new_cases
-FROM (
-    SELECT location, date, new_cases, 
-           LAG(new_cases, 7) OVER (PARTITION BY location ORDER BY date) AS previous_week_cases
-    FROM PortfolioProject..CovidDeaths
-) AS subquery
-WHERE new_cases > 1.5 * previous_week_cases;
-
 --Find the locations where the average daily new cases per million people exceeds the global average
 SELECT location, AVG(new_cases_per_million) AS average_new_cases_per_million
 FROM PortfolioProject..CovidDeaths
 GROUP BY location
 HAVING AVG(new_cases_per_million) > (SELECT AVG(new_cases_per_million) FROM PortfolioProject..CovidDeaths);
-
---Calculate the 7-day rolling average of new cases per million people for a specific location
-SELECT location, date, new_cases_per_million,
-       AVG(new_cases_per_million) OVER (PARTITION BY location ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS rolling_average
-FROM PortfolioProject..CovidDeaths
-WHERE location = 'United States';
 
 --Retrieve the date with the highest number of new cases for each location
 SELECT location, date, new_cases
@@ -204,26 +167,10 @@ SELECT location, weekly_hosp_admissions
 FROM PortfolioProject..CovidDeaths
 ORDER BY weekly_hosp_admissions DESC;
 
---Retrieve the total number of hospital patients for a specific location and date
-SELECT location, date, hosp_patients, new_cases, new_deaths
-FROM PortfolioProject..CovidDeaths
-WHERE location = 'United States' 
-
 --Calculate the average number of new cases per million people for each continent
 SELECT continent, AVG(new_cases_per_million) AS average_new_cases_per_million
 FROM PortfolioProject..CovidDeaths
 GROUP BY continent;
-
---Find the locations with the highest population
-SELECT TOP 5 location, population
-FROM PortfolioProject..CovidDeaths
-ORDER BY population DESC;
-
---Retrieve the total number of ICU patients and hospital patients for a specific date
-SELECT date, SUM(icu_patients) AS total_icu_patients, SUM(hosp_patients) AS total_hospital_patients
-FROM PortfolioProject..CovidDeaths
-WHERE date = '2023-05-10'
-GROUP BY date;
 
 --Retrieve the population, total cases, and total deaths for locations where the reproduction rate is greater than 1
 SELECT TOP 5 location, population, total_cases, total_deaths
@@ -234,6 +181,7 @@ WHERE reproduction_rate > 1;
 SELECT continent, SUM(total_cases) AS total_cases, SUM(total_deaths) AS total_deaths
 FROM PortfolioProject..CovidDeaths
 WHERE date = '2023-02-10'
+AND continent IS NOT NULL
 GROUP BY continent;
 
 --working with temp table
@@ -258,7 +206,7 @@ From #PercentOfTotalDeath
 
 
 --Data cleaning
---Remove records with missing or null values all the columns
+--Remove records with missing or null values to all the columns
 DELETE FROM PortfolioProject..CovidDeaths
 WHERE continent IS NULL
    OR location IS NULL
@@ -286,17 +234,9 @@ WHERE continent IS NULL
    OR weekly_hosp_admissions IS NULL
    OR weekly_hosp_admissions_per_million IS NULL;
 
---Clean the continent names by replacing abbreviations with full names
-UPDATE PortfolioProject..CovidDeaths
-SET continent = CASE
-    WHEN continent = 'AF' THEN 'Africa'
-    WHEN continent = 'AS' THEN 'Asia'
-    WHEN continent = 'EU' THEN 'Europe'
-    WHEN continent = 'NA' THEN 'North America'
-    WHEN continent = 'OC' THEN 'Oceania'
-    WHEN continent = 'SA' THEN 'South America'
-    ELSE continent
-    END;
+--delete all records where the location column is "world"
+DELETE FROM PortfolioProject..CovidDeaths
+WHERE location = 'world';
 
 --Remove records with zero or negative values in the hosp_patients column
 DELETE FROM PortfolioProject..CovidDeaths
@@ -319,15 +259,6 @@ WHERE total_deaths <= 0;
 UPDATE PortfolioProject..CovidDeaths
 SET new_cases = 0
 WHERE new_cases IS NULL;
-
---Fill missing values in the reproduction_rate column with the median value for the respective continent
-UPDATE PortfolioProject..CovidDeaths
-SET reproduction_rate = (
-    SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY reproduction_rate) OVER (PARTITION BY continent)
-    FROM PortfolioProject..CovidDeaths
-    WHERE location = PortfolioProject..CovidDeaths.location
-)
-WHERE reproduction_rate IS NULL;
 
 --Remove records with inconsistent or suspicious date values
 DELETE FROM PortfolioProject..CovidDeaths
